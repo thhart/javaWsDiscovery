@@ -1,4 +1,4 @@
-# javaWsDiscovery
+# JavaWsDiscovery
 This is an extreme simple WS-Discovery hack for Java without any dependencies to discover Onvif device addresses and
 others on local networks.
 Looking around for WS-Discovery implementations I found java-ws-discovery and apache-cxf, please look there if you need
