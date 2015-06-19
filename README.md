@@ -7,4 +7,6 @@ Please feel free to add notes, suggestions and whishes or devices not responding
 is responding.
 If your device is not detected, please send a network recording of your UDP traffic.
 
+Please check my modifications to https://github.com/thhart/onvif-java-lib if you want to use it for Onvif management.
+
  -- Thomas Hartwig, June 2015
