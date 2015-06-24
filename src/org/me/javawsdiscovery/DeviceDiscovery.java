@@ -78,51 +78,85 @@ public class DeviceDiscovery {
     @return  list of unique devices access strings which might be URLs in most cases
     */
    public static Collection<String> discoverWsDevices() {
-      final Collection<String> addresses = new TreeSet<>();
+      final Collection<String> addresses = new ConcurrentSkipListSet<>();
       final CountDownLatch serverStarted = new CountDownLatch(1);
       final CountDownLatch serverFinished = new CountDownLatch(1);
+      final Collection<InetAddress> addressList = new ArrayList<>();
       try {
-         final String uuid = UUID.randomUUID().toString();
-         WS_DISCOVERY_PROBE_MESSAGE = WS_DISCOVERY_PROBE_MESSAGE.replaceAll("<wsa:MessageID>urn:uuid:.*</wsa:MessageID>", "<wsa:MessageID>urn:uuid:" + uuid + "</wsa:MessageID>");
-         final int port = random.nextInt(20000) + 40000;
-         @SuppressWarnings("SocketOpenedButNotSafelyClosed")
-         final DatagramSocket server = new DatagramSocket(port);
-         new Thread() {
-            public void run() {
-               try {
-                  final DatagramPacket packet = new DatagramPacket(new byte[4096], 4096);
-                  server.setSoTimeout(WS_DISCOVERY_TIMEOUT);
-                  long timerStarted = System.currentTimeMillis();
-                  while (System.currentTimeMillis() - timerStarted < (WS_DISCOVERY_TIMEOUT)) {
-                     serverStarted.countDown();
-                     server.receive(packet);
-                     final Collection<String> collection = parseSoapResponseForUrls(Arrays.copyOf(packet.getData(), packet.getLength()));
-                     for (String key : collection) {
-                        addresses.add(key);
-                     }
+         final Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+         if(interfaces != null) {
+            while (interfaces.hasMoreElements()) {
+               NetworkInterface anInterface = interfaces.nextElement();
+               if( ! anInterface.isLoopback() ) {
+                  final List<InterfaceAddress> interfaceAddresses = anInterface.getInterfaceAddresses();
+                  for (InterfaceAddress address : interfaceAddresses) {
+                     addressList.add(address.getAddress());
                   }
-               } catch (SocketTimeoutException ignored) {
-               } catch (Exception e) {
-                  e.printStackTrace();
-               } finally {
-                  serverFinished.countDown();
-                  server.close();
                }
             }
-         }.start();
-         try {
-            serverStarted.await(1000, TimeUnit.MILLISECONDS);
-         } catch (InterruptedException e) {
-            e.printStackTrace();
          }
-         server.send(new DatagramPacket(WS_DISCOVERY_PROBE_MESSAGE.getBytes(), WS_DISCOVERY_PROBE_MESSAGE.length(), InetAddress.getByName(WS_DISCOVERY_ADDRESS_IPv4), WS_DISCOVERY_PORT));
-      } catch (Exception e) {
+      } catch (SocketException e) {
          e.printStackTrace();
       }
+      ExecutorService executorService = Executors.newCachedThreadPool();
+      for (final InetAddress address : addressList) {
+         Runnable runnable = new Runnable() {
+            public void run() {
+               try {
+                  final String uuid = UUID.randomUUID().toString();
+                  final String probe = WS_DISCOVERY_PROBE_MESSAGE.replaceAll("<wsa:MessageID>urn:uuid:.*</wsa:MessageID>", "<wsa:MessageID>urn:uuid:" + uuid + "</wsa:MessageID>");
+                  final int port = random.nextInt(20000) + 40000;
+                  @SuppressWarnings("SocketOpenedButNotSafelyClosed")
+                  final DatagramSocket server = new DatagramSocket(port, address);
+                  new Thread() {
+                     public void run() {
+                        try {
+                           final DatagramPacket packet = new DatagramPacket(new byte[4096], 4096);
+                           server.setSoTimeout(WS_DISCOVERY_TIMEOUT);
+                           long timerStarted = System.currentTimeMillis();
+                           while (System.currentTimeMillis() - timerStarted < (WS_DISCOVERY_TIMEOUT)) {
+                              serverStarted.countDown();
+                              server.receive(packet);
+                              final Collection<String> collection = parseSoapResponseForUrls(Arrays.copyOf(packet.getData(), packet.getLength()));
+                              for (String key : collection) {
+                                 addresses.add(key);
+                              }
+                           }
+                        } catch (SocketTimeoutException ignored) {
+                        } catch (Exception e) {
+                           e.printStackTrace();
+                        } finally {
+                           serverFinished.countDown();
+                           server.close();
+                        }
+                     }
+                  }.start();
+                  try {
+                     serverStarted.await(1000, TimeUnit.MILLISECONDS);
+                  } catch (InterruptedException e) {
+                     e.printStackTrace();
+                  }
+                  if (address instanceof Inet4Address) {
+                     server.send(new DatagramPacket(probe.getBytes(), probe.length(), InetAddress.getByName(WS_DISCOVERY_ADDRESS_IPv4), WS_DISCOVERY_PORT));
+                  } else {
+                     server.send(new DatagramPacket(probe.getBytes(), probe.length(), InetAddress.getByName(WS_DISCOVERY_ADDRESS_IPv6), WS_DISCOVERY_PORT));
+                  }
+               } catch (Exception e) {
+                  e.printStackTrace();
+               }
+               try {
+                  serverFinished.await((WS_DISCOVERY_TIMEOUT), TimeUnit.MILLISECONDS);
+               } catch (InterruptedException e) {
+                  e.printStackTrace();
+               }
+            }
+         };
+         executorService.submit(runnable);
+      }
       try {
-         serverFinished.await((WS_DISCOVERY_TIMEOUT), TimeUnit.MILLISECONDS);
-      } catch (InterruptedException e) {
-         e.printStackTrace();
+         executorService.shutdown();
+         executorService.awaitTermination(WS_DISCOVERY_TIMEOUT + 2000, TimeUnit.MILLISECONDS);
+      } catch (InterruptedException ignored) {
       }
       return addresses;
    }
